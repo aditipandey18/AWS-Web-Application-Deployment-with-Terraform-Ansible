@@ -1,0 +1,89 @@
+---
+- name: Configure EC2 with Nginx and Node.js
+  hosts: web
+  become: yes
+
+  tasks:
+    - name: Update apt
+      apt:
+        update_cache: yes
+
+    - name: Install packages
+      apt:
+        name:
+          - nginx
+          - nodejs
+          - npm
+        state: present
+
+    - name: Create app directory
+      file:
+        path: /var/www/nodeapp
+        state: directory
+        mode: '0755'
+
+    - name: Create simple Node.js app
+      copy:
+        dest: /var/www/nodeapp/server.js
+        content: |
+          const http = require('http');
+
+          const server = http.createServer((req, res) => {
+            res.writeHead(200, {'Content-Type': 'text/plain'});
+            res.end('Hello from Node.js app deployed using Ansible!\n');
+          });
+
+          server.listen(3000, '127.0.0.1', () => {
+            console.log('Server running on port 3000');
+          });
+
+    - name: Create systemd service for Node app
+      copy:
+        dest: /etc/systemd/system/nodeapp.service
+        content: |
+          [Unit]
+          Description=Simple Node.js App
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/bin/node /var/www/nodeapp/server.js
+          Restart=always
+          User=www-data
+          Environment=NODE_ENV=production
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Node app
+      systemd:
+        name: nodeapp
+        state: started
+        enabled: yes
+
+    - name: Configure Nginx reverse proxy
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+
+              location / {
+                  proxy_pass http://127.0.0.1:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+              }
+          }
+
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
